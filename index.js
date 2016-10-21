@@ -15,6 +15,12 @@ function XboxAccessory(log, config) {
   this.xbox = new Xbox(config['ipAddress'], config['liveId']);
   this.tries = config['tries'] || 5;
   this.tryInterval = config['tryInterval'] || 1000;
+  this.isOnline = false;
+  
+  var pinger = new Pinger(this.xbox.ip, 1000 * 5, function(state) {
+    this.isOnline = state;
+    service.getCharacteristic(Characteristic.On).getValue();
+  }.bind(this), log).start();
 }
 
 XboxAccessory.prototype = {  
@@ -34,10 +40,8 @@ XboxAccessory.prototype = {
     callback();
   },
 
-  getPowerState: function(callback) {
-    ping.sys.probe(this.xbox.ip, function(isAlive){
-      callback(null, isAlive);
-    });
+  getPowerState: function(callback) {  
+    callback(null, this.isOnline);
   },
 
   identify: function(callback) {
@@ -59,3 +63,57 @@ XboxAccessory.prototype = {
     return [switchService];
   }
 };
+
+function Pinger(ip, interval, callback, log) {
+  var running = false,
+    pingSession = ping.createSession(),
+    pingTimer, resumeTimer;
+
+  var log = log || function() {};
+
+
+  function run() {
+    if (running) {
+      return;
+    }
+
+    running = true;
+    pingSession.pingHost(ip, function(error) {
+      callback(!error);
+      running = false;
+    });
+  }
+
+
+  return {
+    start: function() {
+      this.stop();
+      log('Starting timer on %dms interval for %s.', interval, ip);
+      pingTimer = setInterval(run, interval);
+      return this;
+    },
+
+    stop: function() {
+      if (pingTimer) {
+        log('Stopping the current timer for %s.', ip);
+        pingTimer = clearInterval(pingTimer);
+      }
+
+      return this;
+    },
+
+    suspend: function(until) {
+      this.stop();
+
+      if (resumeTimer) {
+        log('Cancel currently running resume timer for %s', ip);
+        resumeTimer = clearInterval(resumeTimer);
+      }
+
+      log('Setting resume timer for %s for %dms', ip, until);
+      resumeTimer = setTimeout(this.start.bind(this), until);
+
+      return this;
+    }
+  };
+}
